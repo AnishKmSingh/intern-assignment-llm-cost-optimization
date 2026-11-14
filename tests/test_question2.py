@@ -21,7 +21,18 @@ def test_pipeline_resolves_public_tickets():
         assert got.kb_article == expected.kb_article
 
 
-def test_baseline_cost_is_high():
+def test_cost_within_target():
+    for tid in PUBLIC:
+        pipe = SupportPipeline()
+        pipe.handle_ticket(tid)
+        assert pipe.session.total_points() <= 2500
+
+
+def test_retrieval_finds_expected_article():
+    from shared.tools import get_order, get_ticket
+
     pipe = SupportPipeline()
-    pipe.handle_ticket(PUBLIC[0])
-    assert pipe.session.total_points() > 70_000
+    for tid, expected in TICKET_EXPECTATIONS.items():
+        ticket = get_ticket(tid)
+        order = get_order(ticket["order_id"])
+        assert expected.kb_article in pipe._retrieve(pipe._triage(ticket, order))
