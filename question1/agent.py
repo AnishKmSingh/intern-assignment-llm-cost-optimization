@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import re
-import uuid
 from dataclasses import dataclass
+from functools import lru_cache
 
-from shared.billing import CostSession
+from shared.billing import CACHE_MIN_PREFIX, CostSession
 from shared.kb import all_articles_blob
 from shared.llm import ChatMessage, LlmClient
+from shared.tokens import count_tokens
 from shared.tools import format_thread, get_order, get_ticket
 
 
@@ -32,22 +33,43 @@ def parse_resolution(text: str) -> TicketResolution:
     )
 
 
-_FEW_SHOT = """
-Example ticket resolutions (format to copy):
+def compact_snapshot(order: dict) -> str:
+    """Order facts as single-line JSON (no indent whitespace to pay for)."""
+    return json.dumps(order, separators=(",", ":"))
 
-1. Unopened headphones, day 10 → {"action":"REFUND","kb_article":"returns-within-30-days"}
-2. Ebook, license shown → {"action":"SEND_ARTICLE","kb_article":"digital-license-no-refund"}
-3. Cracked custom mug → {"action":"ESCALATE_TIER2","kb_article":"custom-items-no-replace"}
-4. Cracked stock mug, day 2 → {"action":"REPLACE","kb_article":"damage-replacement-7-days"}
-"""
+
+@lru_cache
+def system_prompt() -> str:
+    """
+    Static part of the prompt. It is byte-identical for every ticket (no run id,
+    no timestamps), so it is a valid cache prefix.
+    """
+    return "\n".join(
+        [
+            "You are ShopAssist, a Tier-1 e-commerce support copilot.",
+            "Pick one action: REFUND, REPLACE, SEND_ARTICLE or ESCALATE_TIER2, "
+            "and cite the id of the help-center article that backs it.",
+            "Reply with JSON only, no other text: "
+            '{"action":"...","kb_article":"<article id>","customer_reply":"<one sentence>"}',
+            "HELP CENTER:",
+            all_articles_blob(),
+        ]
+    )
+
+
+@lru_cache
+def cacheable_prefix() -> str | None:
+    """Prefix to bill at the cached rate, or None if it is under the minimum size."""
+    prefix = f"SYSTEM:\n{system_prompt()}"
+    return prefix if count_tokens(prefix) >= CACHE_MIN_PREFIX else None
 
 
 class SupportCopilot:
     """
-    ShopAssist Tier-1 copilot (baseline).
+    ShopAssist Tier-1 copilot (cost-optimised).
 
-    Given a support ticket + order snapshot, choose an action, cite the help-center
-    article, and draft the customer reply.
+    One LLM call per ticket: static instructions + help center first, then the
+    ticket thread and order facts. The model returns a short JSON object only.
     """
 
     def __init__(self, session: CostSession | None = None):
@@ -57,32 +79,17 @@ class SupportCopilot:
     def build_messages(self, ticket_id: str) -> list[ChatMessage]:
         ticket = get_ticket(ticket_id)
         order = get_order(ticket["order_id"])
-        thread = format_thread(ticket)
-        snapshot = json.dumps(order, indent=2)
-
-        system = "\n\n".join(
+        user = "\n".join(
             [
-                f"Run id {uuid.uuid4()}",
-                "You are ShopAssist, the Tier-1 customer support copilot.",
-                _FEW_SHOT,
-                "HELP CENTER:",
-                all_articles_blob(),
-                (
-                    "Instructions: Think step by step. Write full reasoning, quote any article "
-                    "you rely on, then output JSON with action, kb_article, customer_reply."
-                ),
+                f"THREAD:\n{format_thread(ticket)}",
+                f"ORDER_SNAPSHOT:\n{compact_snapshot(order)}\nEND_SNAPSHOT",
             ]
         )
-        user = "\n\n".join(
-            [
-                f"TICKET_ID: {ticket_id}",
-                f"THREAD:\n{thread}",
-                f"ORDER_SNAPSHOT:\n{snapshot}\nEND_SNAPSHOT",
-            ]
-        )
-        return [ChatMessage("system", system), ChatMessage("user", user)]
+        return [ChatMessage("system", system_prompt()), ChatMessage("user", user)]
 
     def handle_ticket(self, ticket_id: str) -> TicketResolution:
         messages = self.build_messages(ticket_id)
-        completion = self.llm.chat("handle_ticket", messages)
+        completion = self.llm.chat(
+            "handle_ticket", messages, cached_prefix=cacheable_prefix()
+        )
         return parse_resolution(completion)
