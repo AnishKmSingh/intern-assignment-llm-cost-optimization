@@ -1,80 +1,34 @@
-
-### Architecture, before and after
-
-**Before**
-
-```mermaid
-%%{init: {"flowchart": {"htmlLabels": false}}}%%
-flowchart TD
-    A["Fetch ticket + order"] --> B["Large system prompt"]
-    B --> C["One LLM call"]
-    C --> D["Parse response"]
-
-    classDef bad fill:#8b1a1a,stroke:#e74c3c,color:#ffffff
-    class B,C bad
-```
-
-**After**
-
-```mermaid
-%%{init: {"flowchart": {"htmlLabels": false}}}%%
-flowchart TD
-    A["Fetch ticket + order"] --> B["Static system prompt"]
-    B --> C["Compact input"]
-    C --> D["One LLM call"]
-    D --> E["Parse response"]
-
-    classDef good fill:#1e5631,stroke:#2ecc71,color:#ffffff
-    class B,C,D good
-```
-
-| Step | Before | After |
-|------|--------|-------|
-| System prompt | Run ID, few-shot examples, help center, step-by-step instructions | Instructions and help center only, same on every call |
-| Input | Indented order JSON | Thread and one-line order JSON |
-| LLM output | ~480 tokens of reasoning | JSON only, ~46 tokens |
-
-The static system prompt is passed as a cached prefix automatically once it
-reaches 1,024 tokens. It is about 170 tokens today, so caching is not active.
+### Q1 before: one LLM call with a large prompt and long reasoning (~8,800 points)
+<img width="895" height="683" alt="q1-before" src="https://github.com/user-attachments/assets/47a8ca33-1e0e-4ee1-8e6d-199ed53dab88" />
 
 
-## Question 2 — architecture, before and after
+### Q1 after: same single call, static prompt and JSON-only output (~1,850 points)
 
-### Before: four LLM calls per ticket
+<img width="862" height="799" alt="q1-after" src="https://github.com/user-attachments/assets/5c0112ba-9118-47df-aff0-df04b5fd32a7" />
 
-```mermaid
-%%{init: {"flowchart": {"htmlLabels": false}}}%%
-flowchart TD
-    A["Customer ticket"] --> B["1. Triage (LLM)"]
-    B --> C["2. Retrieve (LLM)"]
-    C --> D["3. Compose (LLM)"]
-    D --> E["4. Audit (LLM)"]
-    E --> F["Final resolution"]
 
-    classDef llm fill:#8b1a1a,stroke:#e74c3c,color:#ffffff
-    class B,C,D,E llm
-```
 
-### After: one LLM call per ticket
+### Q2 before: four LLM calls, help center sent twice (~73,500 points)
+<img width="1199" height="939" alt="q2-before" src="https://github.com/user-attachments/assets/30669465-ebf8-4672-9aae-c1ca32f7a180" />
 
-```mermaid
-%%{init: {"flowchart": {"htmlLabels": false}}}%%
-flowchart TD
-    A["Customer ticket"] --> B["1. Triage (Python)"]
-    B --> C["2. Retrieve (Python)"]
-    C --> D["3. Compose (LLM)"]
-    D --> E{"4. Audit (Python)"}
-    E -->|Pass| F["Final resolution"]
-    E -->|Fail| G["Retry compose once"]
-    G --> F
 
-    classDef llm fill:#8b1a1a,stroke:#e74c3c,color:#ffffff
-    class D llm
-```
+### Q2 after: one LLM call, triage, retrieve and audit in Python (~1,500 points)
+<img width="1116" height="1116" alt="q2-after" src="https://github.com/user-attachments/assets/9f0a769d-de4a-44f5-b716-c64a3b4ccae1" />
 
-| Step | Before | After |
-|------|--------|-------|
-| Triage | LLM reads 120k chars of help center, restates ticket | Python extracts keywords from message and order |
-| Retrieve | LLM asked to print 8 articles it cannot see | Python keyword search, top 3 articles |
-| Compose | Full reasoning, triage pasted twice | Only LLM call: 3 articles, thread, order; JSON only |
-| Audit | LLM reads 80k chars again, rewrites JSON | Python checks JSON, action and article; retries only on failure |
+
+## Results comparison
+
+| Question | Ticket | Before (points) | After (points) | Target | Saving |
+|----------|--------|----------------:|---------------:|-------:|-------:|
+| Q1 | T-1001 | 8,841 | 1,854 | ≤ 3,000 | 79% |
+| Q1 | T-1002 | – | 1,731 | ≤ 3,000 | – |
+| Q1 | T-1003 | – | 1,692 | ≤ 3,000 | – |
+| Q1 | T-1004 | – | 1,653 | ≤ 3,000 | – |
+| **Q1** | **All 4 tickets** | **35,418** | **6,930** | | **80%** |
+| Q2 | T-1001 | 73,503 | 1,566 | ≤ 2,500 | 98% |
+| Q2 | T-1002 | – | 1,443 | ≤ 2,500 | – |
+| Q2 | T-1003 | 73,545 | 1,383 | ≤ 2,500 | 98% |
+| Q2 | T-1004 | – | 1,344 | ≤ 2,500 | – |
+| **Q2** | **All 4 tickets** | **~294,000** | **5,736** | | **98%** |
+
+All answers (`action`, `kb_article`) are unchanged, and `pytest -q` gives 7 passed.
