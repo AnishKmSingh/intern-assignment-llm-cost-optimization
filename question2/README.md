@@ -1,5 +1,24 @@
 # Question 2 — SupportPipeline
 
+## Baseline architecture (before)
+
+All four steps called the LLM, and two of them pasted large parts of the
+210k-token help center into the prompt. One ticket cost about 73,500 points.
+
+```mermaid
+flowchart TD
+    A["Customer ticket"] --> B["1. Triage - LLM call 1<br/>Reads ticket + 120k chars of help center<br/>Restates ticket step by step"]
+    B --> C["2. Retrieve - LLM call 2<br/>Asked to print 8 articles it cannot see"]
+    C --> D["3. Compose - LLM call 3<br/>Full reasoning, triage pasted twice"]
+    D --> E["4. Audit - LLM call 4<br/>80k chars of help center again<br/>Double-checks and rewrites JSON"]
+    E --> F["Final resolution"]
+
+    style B fill:#f8d7da,stroke:#c0392b
+    style C fill:#f8d7da,stroke:#c0392b
+    style D fill:#f8d7da,stroke:#c0392b
+    style E fill:#f8d7da,stroke:#c0392b
+```
+
 ## SupportPipeline architecture
 
 Only `compose` calls the LLM on the normal path. Triage, retrieve and audit
